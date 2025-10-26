@@ -85,25 +85,28 @@ def get_all_unposted_articles(live_feeds, local_xml, posted_links):
     # --- بخش دوم: بررسی بانک مقالات محلی ---
     print(f"Checking local file: {local_xml}...")
     try:
-        with open(local_xml, 'r', encoding='utf-8') as f:
-            feed_content = f.read()
-            
-        feed = feedparser.parse(feed_content)
-        if feed.entries:
-            for entry in feed.entries:
-                if "rss.app" in entry.link or "theschooloflife.com/articles/" == entry.link: continue
+        # اطمینان از وجود فایل قبل از خواندن
+        if not os.path.exists(local_xml):
+            print(f"Warning: '{local_xml}' not found. Skipping local DB.")
+        else:
+            with open(local_xml, 'r', encoding='utf-8') as f:
+                feed_content = f.read()
                 
-                link = entry.link
-                if link not in posted_links:
-                    content_html = entry.get('content', [{}])[0].get('value', '')
-                    if not content_html: content_html = getattr(entry, 'description', '')
-                    summary_text = BeautifulSoup(content_html, 'html.parser').get_text()
+            feed = feedparser.parse(feed_content)
+            if feed.entries:
+                for entry in feed.entries:
+                    # نادیده گرفتن لینک‌های مشکل‌دار یا خود صفحه مقالات
+                    if "rss.app" in entry.link or "theschooloflife.com/articles/" == entry.link: continue
                     
-                    article = {"title": entry.title.replace(" - The School of Life", ""), "link": link, "content": summary_text, "source": "The School of Life"}
-                    all_unposted_articles.append(article)
-        
-    except FileNotFoundError:
-        print(f"ERROR: '{local_xml}' not found. Skipping local DB.")
+                    link = entry.link
+                    if link not in posted_links:
+                        content_html = entry.get('content', [{}])[0].get('value', '')
+                        if not content_html: content_html = getattr(entry, 'description', '')
+                        summary_text = BeautifulSoup(content_html, 'html.parser').get_text()
+                        
+                        article = {"title": entry.title.replace(" - The School of Life", ""), "link": link, "content": summary_text, "source": "The School of Life"}
+                        all_unposted_articles.append(article)
+            
     except Exception as e: 
         print(f"Could not parse local XML file. Error: {e}")
 
@@ -121,8 +124,16 @@ def summarize_and_format(article):
     if client is None: return "AI client is not available.", None
     print(f"Analyzing article: {article['title']}")
     
-    # --- STEP 1: Generate Summary ---
-    system_message_summary = "شما یک نویسنده و متفکر عمیق مسلط به فلسفه و روانشناسی هستید. وظیفه شما دریافت یک مقاله انگلیسی و نوشتن یک خلاصه تحلیلی عمیق و مفهومی (حدود ۲۵۰ تا ۳۰۰ کلمه) به زبان فارسی است. خلاصه باید روان، جذاب و فلسفی باشد. مفاهیم اصلی را با استفاده از اموجی‌های مناسب (مانند 💡, 🎯, 🧠) به جای بولت پوینت، دسته‌بندی کنید تا خوانایی بالا برود. مستقیماً خلاصه را شروع کنید و هیچ مقدمه یا توضیحی درباره کاری که انجام می‌دهید ننویسید."
+    # --- STEP 1: Generate Summary (Prompt Fixed) ---
+    system_message_summary = """
+    شما یک نویسنده و متفکر عمیق مسلط به فلسفه و روانشناسی هستید.
+    وظیفه شما: خلاصه‌سازی یک مقاله انگلیسی به زبان فارسی (حدود ۲۵۰-۳۰۰ کلمه).
+    سبک: روان، جذاب و مفهومی.
+    قالب‌بندی: حتما از اموجی‌های مناسب (مانند 💡, 🎯, 🧠) برای ایجاد بولت پوینت استفاده کنید.
+    
+    **قانون بسیار مهم:** به هیچ وجه از عبارات مقدمه‌چینی مانند 'در این مقاله...'، 'این مقاله به بررسی...'، 'نویسنده بیان می‌کند...' یا 'مقاله نشان می‌دهد...' استفاده نکنید.
+    مستقیماً خلاصه را شروع کنید، انگار که خودتان در حال توضیح مفاهیم هستید.
+    """
     user_message_summary = f"Please summarize this article in a detailed, 250-300 word, fluid, and engaging Persian summary, using emojis for key concepts:\n\nTitle: {article['title']}\n\nContent:\n{article['content']}"
     
     persian_summary = ""
@@ -134,15 +145,15 @@ def summarize_and_format(article):
         print(f"Could not analyze article. Error: {e}")
         return None, None
 
-    # --- STEP 2: Translate Title ---
+    # --- STEP 2: Translate Title (Prompt Fixed) ---
     print("Waiting for 5 seconds...")
     time.sleep(5)
-    system_message_title = "Translate the following English title to Persian. Only return the translated text, nothing else."
+    system_message_title = "Translate the following English title to Persian. **CRITICAL RULE: Only return the translated text.** Do not add quotation marks or any other text."
     user_message_title = article['title']
     persian_title = article['title'] 
     try:
         completion_title = client.chat.completions.create(model=MODEL_TO_USE, messages=[{"role": "system", "content": system_message_title}, {"role": "user", "content": user_message_title}], max_tokens=100, temperature=0.1)
-        persian_title = completion_title.choices[0].message.content.strip()
+        persian_title = completion_title.choices[0].message.content.strip().replace('"', '') # حذف کردن کوتیشن‌های احتمالی
         print(f"✅ Title translated successfully: {persian_title}")
     except Exception as e:
         print(f"Could not translate title. Error: {e}")
@@ -194,8 +205,6 @@ def main():
         return
 
     posted_links = get_posted_links()
-    
-    # اولویت اول: فیدهای زنده
     new_article = get_all_unposted_articles(LIVE_FEEDS, LOCAL_XML_FILE, posted_links)
     
     if new_article is None:
