@@ -14,8 +14,8 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 AVALAI_BASE_URL = "https://api.avalai.ir/v1"
 MODEL_TO_USE = "gpt-4o-mini" 
 
-LOCAL_XML_FILE = "content.xml"
-MEMORY_FILE = "_posted_articles.txt"
+LOCAL_XML_FILE = "content.xml" # بانک مقالات محلی
+MEMORY_FILE = "_posted_articles.txt" # فایل حافظه برای جلوگیری از تکرار
 
 # --- 2. INITIALIZE THE AI CLIENT ---
 client = None
@@ -31,6 +31,7 @@ else:
 # --- 3. FUNCTIONS ---
 
 def get_posted_links():
+    """لیست لینک‌های قبلاً پست شده را از حافظه می‌خواند"""
     try:
         with open(MEMORY_FILE, 'r') as f:
             return set(line.strip() for line in f.readlines() if line.strip())
@@ -39,23 +40,32 @@ def get_posted_links():
         return set()
 
 def add_link_to_memory(link):
+    """لینک جدید را به فایل حافظه اضافه می‌کند"""
     try:
-        with open(MEMORY_FILE, 'a') as f:
+        with open(MEMORY_FILE, 'a') as f: # 'a' for append (افزودن به انتها)
             f.write(link + '\n')
         print(f"Updated memory file with new link: {link}")
     except Exception as e:
         print(f"Error writing to memory file: {e}")
 
 def get_unposted_article(xml_file, posted_links):
+    """یک مقاله تصادفی که قبلاً پست نشده را از فایل XML انتخاب می‌کند"""
     print(f"Fetching articles from local file: {xml_file}...")
     try:
-        feed = feedparser.parse(xml_file)
+        with open(xml_file, 'r', encoding='utf-8') as f:
+            feed_content = f.read()
+            
+        feed = feedparser.parse(feed_content)
         if not feed.entries:
             print("No entries found in local XML file.")
             return None
             
         unposted_articles = []
         for entry in feed.entries:
+            # اولین آیتم فید rss.app معمولاً خود سایت است، آن را نادیده می‌گیریم
+            if "rss.app" in entry.link or "theschooloflife.com/articles/" == entry.link:
+                continue
+            
             if entry.link not in posted_links:
                 unposted_articles.append(entry)
         
@@ -66,30 +76,31 @@ def get_unposted_article(xml_file, posted_links):
         chosen_entry = random.choice(unposted_articles)
         print(f"New article selected to post: {chosen_entry.title}")
         
-        content_html = chosen_entry.get('content', [{}])[0].get('value', '')
-        if not content_html:
-            content_html = getattr(chosen_entry, 'description', '')
-        
-        summary_text = BeautifulSoup(content_html, 'html.parser').get_text()
+        # در فید rss.app، محتوای اصلی در <description> است
+        content_html = getattr(chosen_entry, 'description', '')
+        summary_text = BeautifulSoup(content_html, 'html.parser').get_text() # پاکسازی متن از HTML
         
         article = {
-            "title": chosen_entry.title,
+            "title": chosen_entry.title.replace(" - The School of Life", ""),
             "link": chosen_entry.link,
-            "content": summary_text
+            "content": summary_text # متن خلاصه شده از فید (نه کل مقاله)
         }
         return article
         
+    except FileNotFoundError:
+        print(f"ERROR: '{xml_file}' not found. Please create it and add the XML content.")
+        return None
     except Exception as e: 
         print(f"Could not parse local XML file. Error: {e}")
         return None
 
 def summarize_and_format(article):
+    """مقاله را دریافت، خلاصه کرده، هشتگ می‌سازد و برای تلگرام فرمت‌بندی می‌کند."""
     if client is None: return "AI client is not available.", None
     print(f"Analyzing article: {article['title']}")
     
     # --- STEP 1: Generate a longer, detailed, emoji-bulleted summary ---
-    # --- FIX: Prompt updated to use emojis (e.g., 💡, 🎯, 🚀) instead of markdown '*' ---
-    system_message_summary = "شما یک نویسنده و متفکر عمیق مسلط به فلسفه و روانشناسی هستید. وظیفه شما دریافت یک مقاله انگلیسی از سایت The School of Life و نوشتن یک خلاصه تحلیلی عمیق و مفهومی (حدود ۲۵۰ تا ۳۰۰ کلمه) به زبان فارسی است. خلاصه باید روان و جذاب باشد. مفاهیم اصلی را با استفاده از اموجی‌های مناسب (مانند 💡, 🎯, 🚀, 🧠) به جای بولت پوینت، دسته‌بندی کنید تا خوانایی بالا برود. مستقیماً خلاصه را شروع کنید و هیچ مقدمه یا توضیحی درباره کاری که انجام می‌دهید ننویسید."
+    system_message_summary = "شما یک نویسنده و متفکر عمیق مسلط به فلسفه و روانشناسی هستید. وظیفه شما دریافت یک مقاله انگلیسی از سایت The School of Life و نوشتن یک خلاصه تحلیلی عمیق و مفهومی (حدود ۲۵۰ تا ۳۰۰ کلمه) به زبان فارسی است. خلاصه باید روان، جذاب و فلسفی باشد. مفاهیم اصلی را با استفاده از اموجی‌های مناسب (مانند 💡, 🎯, 🧠) به جای بولت پوینت، دسته‌بندی کنید تا خوانایی بالا برود. مستقیماً خلاصه را شروع کنید و هیچ مقدمه یا توضیحی درباره کاری که انجام می‌دهید ننویسید."
     user_message_summary = f"Please summarize this article in a detailed, 250-300 word, fluid, and engaging Persian summary, using emojis for key concepts:\n\nTitle: {article['title']}\n\nContent:\n{article['content']}"
     
     persian_summary = ""
@@ -101,7 +112,7 @@ def summarize_and_format(article):
         print(f"Could not analyze article. Error: {e}")
         return None, None
 
-    # --- STEP 2: Translate the Title (No change needed) ---
+    # --- STEP 2: Translate the Title ---
     print("Waiting for 5 seconds...")
     time.sleep(5)
     system_message_title = "Translate the following English title to Persian. Only return the translated text, nothing else."
@@ -114,7 +125,7 @@ def summarize_and_format(article):
     except Exception as e:
         print(f"Could not translate title. Error: {e}")
 
-    # --- STEP 3: Generate Hashtags (No change needed) ---
+    # --- STEP 3: Generate Hashtags ---
     print("Waiting for 5 seconds...")
     time.sleep(5)
     system_message_hashtags = "You are a metadata specialist. Read the following text and generate exactly 5 relevant, single-word hashtags in Persian. Do not include the '#' symbol. Separate them with commas."
@@ -129,8 +140,7 @@ def summarize_and_format(article):
         print(f"Could not generate hashtags. Error: {e}")
         hashtags_string = "#خلاصه" 
 
-    # --- STEP 4: Assemble Final Post (Using HTML bold tags) ---
-    # --- FIX: Use <b> for bold, not ** ---
+    # --- STEP 4: Assemble Final Post (All fixes applied) ---
     final_post = (
         f"<b>{persian_title}</b>\n\n" 
         f"{persian_summary}\n\n"
@@ -148,8 +158,8 @@ async def send_to_telegram(report, token, chat_id):
         await bot.send_message(
             chat_id=chat_id, 
             text=report, 
-            parse_mode='HTML', # --- HTML mode is correct ---
-            disable_web_page_preview=False 
+            parse_mode='HTML',
+            disable_web_page_preview=False # پیش‌نمایش لینک فعال است
         )
         print("Post successfully sent.")
     except Exception as e: print(f"Failed to send post. Error: {e}")
@@ -173,7 +183,7 @@ def main():
     
     if report:
         asyncio.run(send_to_telegram(report, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID))
-        add_link_to_memory(new_link) 
+        add_link_to_memory(new_link) # ذخیره لینک جدید در حافظه
     else:
         print("Failed to generate report.")
         
