@@ -2,6 +2,7 @@ import os
 import feedparser
 import telegram
 import asyncio
+import time
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from openai import OpenAI
@@ -13,9 +14,10 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 AVALAI_BASE_URL = "https://api.avalai.ir/v1"
 MODEL_TO_USE = "gpt-4o-mini" 
 
-# این آدرس فید اصلی است، اما در تست زیر از آن استفاده نمی‌کنیم
+# فید RSS سفارشی شما
 RSS_FEED_URL = "https://rss.app/feed/tVpLudGvjlggDz0Z"
-DAYS_TO_CHECK = 2 
+# نام فایل حافظه
+MEMORY_FILE = "_last_processed_link.txt"
 
 # --- 2. INITIALIZE THE AI CLIENT ---
 client = None
@@ -33,56 +35,115 @@ else:
 
 # --- 3. FUNCTIONS ---
 
+def get_last_processed_link():
+    """لینک ذخیره شده در فایل حافظه را می‌خواند"""
+    try:
+        with open(MEMORY_FILE, 'r') as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        print("Memory file not found. Will create one.")
+        return None
+
+def set_last_processed_link(link):
+    """لینک جدید را در فایل حافظه می‌نویسد"""
+    try:
+        with open(MEMORY_FILE, 'w') as f:
+            f.write(link)
+        print(f"Updated memory file with new link: {link}")
+    except Exception as e:
+        print(f"Error writing to memory file: {e}")
+
 def get_newest_article(feed_url):
-    # این تابع در حالت تست صدا زده نمی‌شود
+    """فقط جدیدترین مقاله موجود در فید را برمی‌گرداند"""
     print(f"Fetching articles from {feed_url}...")
-    cutoff_date = datetime.now() - timedelta(days=DAYS_TO_CHECK)
-    
     try:
         feed = feedparser.parse(feed_url)
         if not feed.entries:
             print("No entries found in feed.")
             return None
-        # ... (بقیه کد بدون تغییر)
+            
+        # فقط جدیدترین مقاله (اولین آیتم) را برمی‌داریم
+        latest_article_entry = feed.entries[0] 
+        
+        content_html = latest_article_entry.get('content', [{}])[0].get('value', '')
+        if not content_html:
+            content_html = getattr(latest_article_entry, 'description', '')
+        
+        summary_text = BeautifulSoup(content_html, 'html.parser').get_text()
+        
+        article = {
+            "title": latest_article_entry.title,
+            "link": latest_article_entry.link,
+            "content": summary_text
+        }
+        return article
     except Exception as e: 
         print(f"Could not fetch or parse feed. Error: {e}")
-    print(f"No new articles found within the last {DAYS_TO_CHECK} days.")
-    return None
+        return None
 
 def summarize_and_format(article):
-    """مقاله را دریافت، به فارسی خلاصه و برای تلگرام فرمت‌بندی می‌کند."""
+    """مقاله را دریافت، خلاصه کرده، هشتگ می‌سازد و برای تلگرام فرمت‌بندی می‌کند."""
     if client is None: 
-        return "AI client is not available."
+        return "AI client is not available.", None
 
     print(f"Analyzing article: {article['title']}")
     
-    system_message = "شما یک نویسنده و متفکر عمیق مسلط به فلسفه و روانشناسی هستید. وظیفه شما دریافت یک مقاله انگلیسی از سایت The School of Life و خلاصه‌سازی عمیق و مفهومی آن به زبان فارسی است. خلاصه باید روان، جذاب و فلسفی باشد و مفاهیم اصلی مقاله را به خوبی منتقل کند. از نوشتن هرگونه متن اضافه یا مقدمه‌چینی خودداری کنید."
-    user_message = f"Please summarize this article in fluid, engaging Persian:\n\nTitle: {article['title']}\n\nContent:\n{article['content']}"
-
+    # --- STEP 1: Generate a longer, more detailed summary ---
+    system_message_summary = "شما یک نویسنده و متفکر عمیق مسلط به فلسفه و روانشناسی هستید. وظیفه شما دریافت یک مقاله انگلیسی از سایت The School of Life و نوشتن یک خلاصه تحلیلی عمیق و مفهومی (حدود ۱۵۰ تا ۲۰۰ کلمه) به زبان فارسی است. خلاصه باید روان، جذاب و فلسفی باشد و مفاهیم اصلی مقاله را به خوبی منتقل کند. از مقدمه‌چینی خودداری کنید و مستقیماً به سراغ تحلیل بروید."
+    user_message_summary = f"Please summarize this article in a detailed, fluid, and engaging Persian summary:\n\nTitle: {article['title']}\n\nContent:\n{article['content']}"
+    
+    persian_summary = ""
     try:
-        completion = client.chat.completions.create(
+        completion_summary = client.chat.completions.create(
             model=MODEL_TO_USE,
             messages=[
-                {"role": "system", "content": system_message},
-                {"role": "user", "content": user_message},
+                {"role": "system", "content": system_message_summary},
+                {"role": "user", "content": user_message_summary},
             ],
             max_tokens=2048, 
             temperature=0.7,
         )
-        persian_summary = completion.choices[0].message.content.strip()
-        
-        final_post = (
-            f"<b>{article['title']}</b>\n\n"
-            f"{persian_summary}\n\n"
-            f"<i>منبع: The School of Life</i>\n"
-            f"<a href='{article['link']}'>ادامه مطلب</a>"
-        )
-        return final_post
-        
+        persian_summary = completion_summary.choices[0].message.content.strip()
+        print("✅ Summary generated successfully.")
     except Exception as e:
         print(f"Could not analyze article. Error: {e}")
-        return None
+        return None, None
 
+    # --- STEP 2: Generate Hashtags ---
+    print("Waiting for 5 seconds before generating hashtags...")
+    time.sleep(5)
+    
+    system_message_hashtags = "You are a metadata specialist. Read the following text and generate exactly 5 relevant, single-word hashtags in Persian. Do not include the '#' symbol. Separate them with commas."
+    user_message_hashtags = f"Text:\n{persian_summary}"
+    
+    hashtags_string = ""
+    try:
+        completion_tags = client.chat.completions.create(
+            model=MODEL_TO_USE,
+            messages=[
+                {"role": "system", "content": system_message_hashtags},
+                {"role": "user", "content": user_message_hashtags},
+            ],
+            max_tokens=100,
+            temperature=0.2,
+        )
+        tags = completion_tags.choices[0].message.content.strip()
+        hashtags_string = " ".join([f"#{tag.strip().replace(' ', '_')}" for tag in tags.split(',')]) 
+        print(f"✅ Hashtags generated: {hashtags_string}")
+    except Exception as e:
+        print(f"Could not generate hashtags. Error: {e}")
+        hashtags_string = "#خلاصه" 
+
+    # --- STEP 3: Assemble Final Post (All fixes applied) ---
+    final_post = (
+        f"<b>{article['title']}</b>\n\n"
+        f"{persian_summary}\n\n"
+        f"{hashtags_string}\n\n"
+        f"<a href='{article['link']}'>منبع</a>\n"
+        f"@momento_lab 💡"
+    )
+    return final_post, article['link'] # هم پست و هم لینک را برمی‌گردانیم
+        
 async def send_to_telegram(report, token, chat_id):
     if not token or not chat_id: 
         print("Telegram secrets not found.")
@@ -100,40 +161,35 @@ async def send_to_telegram(report, token, chat_id):
     except Exception as e: 
         print(f"Failed to send post. Error: {e}")
 
-# --- 4. EXECUTION (MODIFIED FOR TEST) ---
+# --- 4. EXECUTION (with memory logic) ---
 def main():
     if client is None:
         print("Agent will not run. Check API Key.")
         return
 
-    # --- H-A-R-D-C-O-D-E-D  T-E-S-T ---
-    # ما تابع get_newest_article را صدا نمی‌زنیم و یک مقاله را دستی وارد می‌کنیم
-    print("--- RUNNING IN TEST MODE ---")
-    print("Bypassing feed fetch and using a hard-coded test article.")
+    last_link = get_last_processed_link()
+    new_article = get_newest_article(RSS_FEED_URL)
     
-    test_article = {
-        "title": "Why Play Is a Serious Business",
-        "link": "https://www.theschooloflife.com/blog/why-play-is-a-serious-business/",
-        "content": """
-        Play, in most people’s minds, is the opposite of work. To hear the word is to remember childhood afternoons... 
-        Which is why it can be strange to consider a different argument. That we neglect play at our peril. That unbuttoning how we think of ‘serious work’ and incorporating more light-heartedness and experimentation into our routine can, in fact, boost the quality of our productive time.
-        Play is immediate and fearless... Play is endlessly creative... Play can remind us of what makes work meaningful...
-        The ideal position of play in life was first explored by the Ancient Greeks. Among all their gods, two mattered to them especially. The first was Apollo, god of reason and wisdom. He was concerned with patience, thoroughness, duty and logical thinking... But there was another important god... Dionysus. He was concerned with the imagination, impatience, chaos, emotion, instinct – and play.
-        It’s important to keep in mind that these two sides of life, the frivolous and the imposing, the careful and the chaotic, can and should be embraced alongside one another.
-        """
-    }
+    if new_article is None:
+        print("No articles found in feed. Stopping.")
+        print("\n--- AGENT RUN FINISHED ---")
+        return
 
-    if test_article:
-        report = summarize_and_format(test_article) # <--- تست تابع تحلیل
-        if report:
-            print("Test analysis complete. Sending to Telegram...")
-            asyncio.run(send_to_telegram(report, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID)) # <--- تست تابع تلگرام
-        else:
-            print("Test analysis failed.")
-    else:
-        print("Test article is empty.")
+    if new_article['link'] == last_link:
+        print("Article is the same as last run. No new article found. Stopping.")
+        print("\n--- AGENT RUN FINISHED ---")
+        return
         
-    print("\n--- AGENT TEST RUN FINISHED ---")
+    print(f"New article found! Processing: {new_article['title']}")
+    report, new_link = summarize_and_format(new_article)
+    
+    if report:
+        asyncio.run(send_to_telegram(report, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID))
+        set_last_processed_link(new_link) # ذخیره لینک جدید در حافظه
+    else:
+        print("Failed to generate report.")
+        
+    print("\n--- AGENT RUN FINISHED ---")
 
 if __name__ == "__main__":
     main()
