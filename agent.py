@@ -16,16 +16,14 @@ AVALAI_BASE_URL = "https://api.avalai.ir/v1"
 MODEL_TO_USE = "gpt-4o-mini" 
 
 # --- !!!!!!!!!!!!!!!!!!!!!!!!!!!!! ---
-# --- مخزن نهایی فیدهای فلسفی/روانشناسی ---
-JOURNAL_FEEDS = {
+# --- مخزن کامل فیدها ---
+LIVE_FEEDS = {
     "The Marginalian": "https://www.themarginalian.org/feed/",
     "Scientific American Mind & Brain": "http://rss.sciam.com/sciam/mind-and-brain",
-    # فید سفارشی شما برای School of Life (اگر کار می‌کند)
-    "The School of Life (Custom)": "https://rss.app/feed/tVpLudGvjlggDz0Z" 
 }
-# --- !!!!!!!!!!!!!!!!!!!!!!!!!!!!! ---
-
+LOCAL_XML_FILE = "content.xml" # بانک مقالات پشتیبان
 MEMORY_FILE = "_posted_articles.txt" # فایل حافظه
+# --- !!!!!!!!!!!!!!!!!!!!!!!!!!!!! ---
 
 # --- 2. INITIALIZE THE AI CLIENT ---
 client = None
@@ -52,54 +50,69 @@ def get_posted_links():
 def add_link_to_memory(link):
     """لینک جدید را به فایل حافظه اضافه می‌کند"""
     try:
-        with open(MEMORY_FILE, 'a') as f: # 'a' for append (افزودن به انتها)
+        with open(MEMORY_FILE, 'a') as f:
             f.write(link + '\n')
         print(f"Updated memory file with new link: {link}")
     except Exception as e:
         print(f"Error writing to memory file: {e}")
 
-def get_unposted_article(feeds, posted_links):
-    """تمام فیدها را بررسی می‌کند و یک مقاله تصادفی که قبلاً پست نشده را برمی‌گرداند"""
-    print("Fetching articles from all live feeds...")
-    new_articles_found = []
+def get_all_unposted_articles(live_feeds, local_xml, posted_links):
+    """تمام مقالات پست نشده را از همه منابع (زنده و محلی) جمع‌آوری می‌کند"""
+    print("Fetching articles from all sources...")
+    all_unposted_articles = []
     
-    for journal, url in feeds.items():
-        print(f"Checking feed: {journal}")
+    # --- بخش اول: بررسی فیدهای زنده ---
+    for journal, url in live_feeds.items():
+        print(f"Checking live feed: {journal}")
         try:
             feed = feedparser.parse(url)
-            if not feed.entries:
-                print(f"No entries found for {journal}.")
-                continue
+            if not feed.entries: continue
                 
             for entry in feed.entries:
                 link = entry.link
-                
-                # منطق اصلی حافظه
                 if link not in posted_links:
-                    print(f"Found new unposted article: {entry.title}")
-                    
                     content_html = entry.get('content', [{}])[0].get('value', '')
-                    if not content_html:
-                        content_html = getattr(entry, 'description', '')
-                    
+                    if not content_html: content_html = getattr(entry, 'description', '')
                     summary_text = BeautifulSoup(content_html, 'html.parser').get_text()
                     
-                    article = {
-                        "title": entry.title.strip().replace(" - The School of Life", ""),
-                        "link": link,
-                        "content": summary_text,
-                        "source": journal # نام منبع
-                    }
-                    new_articles_found.append(article)
+                    article = {"title": entry.title.strip(), "link": link, "content": summary_text, "source": journal}
+                    all_unposted_articles.append(article)
                     
         except Exception as e: 
-            print(f"Could not fetch or parse feed for {journal}. Error: {e}")
+            print(f"Could not parse feed for {journal}. Error: {e}")
+
+    # --- بخش دوم: بررسی بانک مقالات محلی ---
+    print(f"Checking local file: {local_xml}...")
+    try:
+        with open(local_xml, 'r', encoding='utf-8') as f:
+            feed_content = f.read()
+            
+        feed = feedparser.parse(feed_content)
+        if feed.entries:
+            for entry in feed.entries:
+                if "rss.app" in entry.link or "theschooloflife.com/articles/" == entry.link: continue
+                
+                link = entry.link
+                if link not in posted_links:
+                    content_html = entry.get('content', [{}])[0].get('value', '')
+                    if not content_html: content_html = getattr(entry, 'description', '')
+                    summary_text = BeautifulSoup(content_html, 'html.parser').get_text()
+                    
+                    article = {"title": entry.title.replace(" - The School of Life", ""), "link": link, "content": summary_text, "source": "The School of Life"}
+                    all_unposted_articles.append(article)
+        
+    except FileNotFoundError:
+        print(f"ERROR: '{local_xml}' not found. Skipping local DB.")
+    except Exception as e: 
+        print(f"Could not parse local XML file. Error: {e}")
+
     
-    if not new_articles_found:
-        print("No new (unposted) articles found in any feed.")
+    if not all_unposted_articles:
+        print("No new (unposted) articles found in any source.")
         return None
         
-    chosen_article = random.choice(new_articles_found)
+    # --- انتخاب تصادفی از مخزن بزرگ ---
+    chosen_article = random.choice(all_unposted_articles)
     return chosen_article
 
 def summarize_and_format(article):
@@ -173,17 +186,19 @@ async def send_to_telegram(report, token, chat_id):
         print("Post successfully sent.")
     except Exception as e: print(f"Failed to send post. Error: {e}")
 
-# --- 5. EXECUTION (with memory logic) ---
+# --- 5. EXECUTION (with combined logic) ---
 def main():
     if client is None:
         print("Agent will not run. Check API Key.")
         return
 
     posted_links = get_posted_links()
-    new_article = get_unposted_article(JOURNAL_FEEDS, posted_links)
+    
+    # اولویت اول: فیدهای زنده
+    new_article = get_all_unposted_articles(LIVE_FEEDS, LOCAL_XML_FILE, posted_links)
     
     if new_article is None:
-        print("No new (unposted) articles found in any feed. Stopping.")
+        print("No new (unposted) articles found in any source. Stopping.")
         print("\n--- AGENT RUN FINISHED ---")
         return
         
