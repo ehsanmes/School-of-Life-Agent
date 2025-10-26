@@ -15,18 +15,16 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 AVALAI_BASE_URL = "https://api.avalai.ir/v1"
 MODEL_TO_USE = "gpt-4o-mini" 
 
-# --- FINAL, VERIFIED RSS FEEDS ---
+# --- !!!!!!!!!!!!!!!!!!!!!!!!!!!!! ---
+# --- مخزن نهایی فیدهای فلسفی/روانشناسی ---
 JOURNAL_FEEDS = {
-    "The School of Life": "https://www.theschooloflife.com/feed/",
-    "Aeon": "https://aeon.co/feed.rss",
     "The Marginalian": "https://www.themarginalian.org/feed/",
-    "Nautilus": "https://nautil.us/feed/",
-    "Big Think": "https://bigthink.com/feed/",
     "Scientific American Mind & Brain": "http://rss.sciam.com/sciam/mind-and-brain",
-    "Quanta Magazine": "https://api.quantamagazine.org/feed/",
-    "The Atlantic - Ideas": "https://www.theatlantic.com/feed/channel/ideas/"
+    # فید سفارشی شما برای School of Life (اگر کار می‌کند)
+    "The School of Life (Custom)": "https://rss.app/feed/tVpLudGvjlggDz0Z" 
 }
-DAYS_TO_CHECK = 30 # فقط مقالات ۲۴ ساعت گذشته
+# --- !!!!!!!!!!!!!!!!!!!!!!!!!!!!! ---
+
 MEMORY_FILE = "_posted_articles.txt" # فایل حافظه
 
 # --- 2. INITIALIZE THE AI CLIENT ---
@@ -54,16 +52,15 @@ def get_posted_links():
 def add_link_to_memory(link):
     """لینک جدید را به فایل حافظه اضافه می‌کند"""
     try:
-        with open(MEMORY_FILE, 'a') as f:
+        with open(MEMORY_FILE, 'a') as f: # 'a' for append (افزودن به انتها)
             f.write(link + '\n')
         print(f"Updated memory file with new link: {link}")
     except Exception as e:
         print(f"Error writing to memory file: {e}")
 
 def get_unposted_article(feeds, posted_links):
-    """جدیدترین مقالاتی که پست نشده‌اند را از همه فیدها پیدا می‌کند"""
+    """تمام فیدها را بررسی می‌کند و یک مقاله تصادفی که قبلاً پست نشده را برمی‌گرداند"""
     print("Fetching articles from all live feeds...")
-    cutoff_date = datetime.now() - timedelta(days=DAYS_TO_CHECK)
     new_articles_found = []
     
     for journal, url in feeds.items():
@@ -76,29 +73,25 @@ def get_unposted_article(feeds, posted_links):
                 
             for entry in feed.entries:
                 link = entry.link
-                if link in posted_links:
-                    continue # این مقاله قبلاً پست شده است
-
-                published_time_struct = getattr(entry, 'published_parsed', None)
-                if published_time_struct:
-                     published_time = datetime(*published_time_struct[:6])
-                     if published_time >= cutoff_date:
-                        print(f"Found new article: {entry.title}")
-                        
-                        content_html = entry.get('content', [{}])[0].get('value', '')
-                        if not content_html:
-                            content_html = getattr(entry, 'description', '')
-                        
-                        summary_text = BeautifulSoup(content_html, 'html.parser').get_text()
-                        
-                        article = {
-                            "title": entry.title.strip(),
-                            "link": link,
-                            "content": summary_text,
-                            "source": journal # نام منبع
-                        }
-                        new_articles_found.append(article)
-                        break 
+                
+                # منطق اصلی حافظه
+                if link not in posted_links:
+                    print(f"Found new unposted article: {entry.title}")
+                    
+                    content_html = entry.get('content', [{}])[0].get('value', '')
+                    if not content_html:
+                        content_html = getattr(entry, 'description', '')
+                    
+                    summary_text = BeautifulSoup(content_html, 'html.parser').get_text()
+                    
+                    article = {
+                        "title": entry.title.strip().replace(" - The School of Life", ""),
+                        "link": link,
+                        "content": summary_text,
+                        "source": journal # نام منبع
+                    }
+                    new_articles_found.append(article)
+                    
         except Exception as e: 
             print(f"Could not fetch or parse feed for {journal}. Error: {e}")
     
