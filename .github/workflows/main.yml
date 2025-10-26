@@ -1,0 +1,29 @@
+name: School of Life Daily Post Agent
+
+on:
+  schedule:
+    # اجرا در ساعت ۱۷:۳۰ UTC (۹ شب به وقت ایران)
+    - cron: '30 17 * * *'
+  workflow_dispatch: # اجازه اجرای دستی
+
+jobs:
+  build-and-run:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run the agent
+        env:
+          AVALAI_API_KEY: ${{ secrets.AVALAI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python agent.py
