@@ -17,11 +17,16 @@ MODEL_TO_USE = "gpt-4o-mini"
 
 # --- FINAL, VERIFIED RSS FEEDS ---
 JOURNAL_FEEDS = {
+    "The School of Life": "https://www.theschooloflife.com/feed/",
     "Aeon": "https://aeon.co/feed.rss",
     "The Marginalian": "https://www.themarginalian.org/feed/",
-    "Nautilus": "https://nautil.us/feed/"
+    "Nautilus": "https://nautil.us/feed/",
+    "Big Think": "https://bigthink.com/feed/",
+    "Scientific American Mind & Brain": "http://rss.sciam.com/sciam/mind-and-brain",
+    "Quanta Magazine": "https://api.quantamagazine.org/feed/",
+    "The Atlantic - Ideas": "https://www.theatlantic.com/feed/channel/ideas/"
 }
-DAYS_TO_CHECK = 1 # فقط مقالات ۲۴ ساعت گذشته
+DAYS_TO_CHECK = 30 # فقط مقالات ۲۴ ساعت گذشته
 MEMORY_FILE = "_posted_articles.txt" # فایل حافظه
 
 # --- 2. INITIALIZE THE AI CLIENT ---
