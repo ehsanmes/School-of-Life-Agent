@@ -15,7 +15,7 @@ MODEL_TO_USE = "gpt-4o-mini"
 
 # --- !!!!!!!!!!!!!!!!!!!!!!!!!!!!! ---
 # --- این خط را با فید RSS سفارشی خود جایگزین کنید ---
-RSS_FEED_URL = "YOUR_CUSTOM_RSS_FEED_URL_HERE" 
+RSS_FEED_URL = "https://rss.app/feed/tVpLudGvjlggDz0Z"
 # --- !!!!!!!!!!!!!!!!!!!!!!!!!!!!! ---
 
 DAYS_TO_CHECK = 2 
