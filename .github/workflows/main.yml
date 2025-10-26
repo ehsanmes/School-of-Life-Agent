@@ -10,7 +10,7 @@ jobs:
   build-and-run:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # اجازه نوشتن در ریپازیتوری برای ذخیره حافظه
+      contents: write 
 
     steps:
       - name: Checkout repository
