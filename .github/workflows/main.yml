@@ -4,11 +4,15 @@ on:
   schedule:
     # اجرا در ساعت ۱۷:۳۰ UTC (۹ شب به وقت ایران)
     - cron: '30 17 * * *'
-  workflow_dispatch: # اجازه اجرای دستی
+  workflow_dispatch: 
 
 jobs:
   build-and-run:
     runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write # <--- مهم: اجازه نوشتن در ریپازیتوری برای ذخیره حافظه
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -27,3 +31,17 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python agent.py
+
+      # --- بخش جدید برای ذخیره کردن حافظه ---
+      - name: Commit and push memory file
+        run: |
+          git config --global user.name "GitHub Action Bot"
+          git config --global user.email "action@github.com"
+          git add _last_processed_link.txt
+          # فقط در صورتی که فایل حافظه تغییر کرده باشد، کامیت می‌کند
+          if ! git diff --staged --quiet; then
+            git commit -m "Update last processed article link"
+            git push
+          else
+            echo "No new articles processed. No commit needed."
+          fi
