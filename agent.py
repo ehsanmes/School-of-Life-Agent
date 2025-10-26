@@ -18,7 +18,7 @@ MODEL_TO_USE = "gpt-4o-mini"
 RSS_FEED_URL = "https://rss.app/feed/tVpLudGvjlggDz0Z"
 # --- !!!!!!!!!!!!!!!!!!!!!!!!!!!!! ---
 
-DAYS_TO_CHECK = 2 
+DAYS_TO_CHECK = 20 
 
 # --- 2. INITIALIZE THE AI CLIENT ---
 client = None
