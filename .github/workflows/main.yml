@@ -2,7 +2,8 @@ name: School of Life Daily Post Agent
 
 on:
   schedule:
-    - cron: '30 17 * * *' # ۹ شب به وقت ایران
+    # اجرا در ساعت ۱۷:۳۰ UTC (۹ شب به وقت ایران)
+    - cron: '30 17 * * *'
   workflow_dispatch: 
 
 jobs:
@@ -32,12 +33,10 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python agent.py
 
-      - name: Commit and push memory file
+      - name: Commit and push memory file (if it exists)
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "action@github.com"
-          
-          # چک می‌کند که آیا فایل حافظه وجود دارد یا نه
           if [ -f _posted_articles.txt ]; then
             git add _posted_articles.txt
             if ! git diff --staged --quiet; then
