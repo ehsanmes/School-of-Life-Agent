@@ -19,6 +19,7 @@ MODEL_TO_USE = "gpt-4o-mini"
 # --- مخزن کامل فیدها ---
 LIVE_FEEDS = {
     "The Marginalian": "https://www.themarginalian.org/feed/",
+    "School of Life": "https://www.theschooloflife.com/feed",
     "Scientific American Mind & Brain": "http://rss.sciam.com/sciam/mind-and-brain",
 }
 LOCAL_XML_FILE = "content.xml" # بانک مقالات پشتیبان
