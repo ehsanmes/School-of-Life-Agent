@@ -6,6 +6,7 @@ import time
 import random
 from bs4 import BeautifulSoup
 from openai import OpenAI
+from datetime import datetime, timedelta
 
 # --- 1. CONFIGURATION ---
 AVALAI_API_KEY = os.environ.get("AVALAI_API_KEY")
@@ -14,8 +15,14 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 AVALAI_BASE_URL = "https://api.avalai.ir/v1"
 MODEL_TO_USE = "gpt-4o-mini" 
 
-LOCAL_XML_FILE = "content.xml" # بانک مقالات محلی
-MEMORY_FILE = "_posted_articles.txt" # فایل حافظه برای جلوگیری از تکرار
+# --- FINAL, VERIFIED RSS FEEDS ---
+JOURNAL_FEEDS = {
+    "Aeon": "https://aeon.co/feed.rss",
+    "The Marginalian": "https://www.themarginalian.org/feed/",
+    "Nautilus": "https://nautil.us/feed/"
+}
+DAYS_TO_CHECK = 1 # فقط مقالات ۲۴ ساعت گذشته
+MEMORY_FILE = "_posted_articles.txt" # فایل حافظه
 
 # --- 2. INITIALIZE THE AI CLIENT ---
 client = None
@@ -42,65 +49,68 @@ def get_posted_links():
 def add_link_to_memory(link):
     """لینک جدید را به فایل حافظه اضافه می‌کند"""
     try:
-        with open(MEMORY_FILE, 'a') as f: # 'a' for append (افزودن به انتها)
+        with open(MEMORY_FILE, 'a') as f:
             f.write(link + '\n')
         print(f"Updated memory file with new link: {link}")
     except Exception as e:
         print(f"Error writing to memory file: {e}")
 
-def get_unposted_article(xml_file, posted_links):
-    """یک مقاله تصادفی که قبلاً پست نشده را از فایل XML انتخاب می‌کند"""
-    print(f"Fetching articles from local file: {xml_file}...")
-    try:
-        with open(xml_file, 'r', encoding='utf-8') as f:
-            feed_content = f.read()
-            
-        feed = feedparser.parse(feed_content)
-        if not feed.entries:
-            print("No entries found in local XML file.")
-            return None
-            
-        unposted_articles = []
-        for entry in feed.entries:
-            # اولین آیتم فید rss.app معمولاً خود سایت است، آن را نادیده می‌گیریم
-            if "rss.app" in entry.link or "theschooloflife.com/articles/" == entry.link:
+def get_unposted_article(feeds, posted_links):
+    """جدیدترین مقالاتی که پست نشده‌اند را از همه فیدها پیدا می‌کند"""
+    print("Fetching articles from all live feeds...")
+    cutoff_date = datetime.now() - timedelta(days=DAYS_TO_CHECK)
+    new_articles_found = []
+    
+    for journal, url in feeds.items():
+        print(f"Checking feed: {journal}")
+        try:
+            feed = feedparser.parse(url)
+            if not feed.entries:
+                print(f"No entries found for {journal}.")
                 continue
-            
-            if entry.link not in posted_links:
-                unposted_articles.append(entry)
-        
-        if not unposted_articles:
-            print("All articles from the database have been posted.")
-            return None
-            
-        chosen_entry = random.choice(unposted_articles)
-        print(f"New article selected to post: {chosen_entry.title}")
-        
-        # در فید rss.app، محتوای اصلی در <description> است
-        content_html = getattr(chosen_entry, 'description', '')
-        summary_text = BeautifulSoup(content_html, 'html.parser').get_text() # پاکسازی متن از HTML
-        
-        article = {
-            "title": chosen_entry.title.replace(" - The School of Life", ""),
-            "link": chosen_entry.link,
-            "content": summary_text # متن خلاصه شده از فید (نه کل مقاله)
-        }
-        return article
-        
-    except FileNotFoundError:
-        print(f"ERROR: '{xml_file}' not found. Please create it and add the XML content.")
+                
+            for entry in feed.entries:
+                link = entry.link
+                if link in posted_links:
+                    continue # این مقاله قبلاً پست شده است
+
+                published_time_struct = getattr(entry, 'published_parsed', None)
+                if published_time_struct:
+                     published_time = datetime(*published_time_struct[:6])
+                     if published_time >= cutoff_date:
+                        print(f"Found new article: {entry.title}")
+                        
+                        content_html = entry.get('content', [{}])[0].get('value', '')
+                        if not content_html:
+                            content_html = getattr(entry, 'description', '')
+                        
+                        summary_text = BeautifulSoup(content_html, 'html.parser').get_text()
+                        
+                        article = {
+                            "title": entry.title.strip(),
+                            "link": link,
+                            "content": summary_text,
+                            "source": journal # نام منبع
+                        }
+                        new_articles_found.append(article)
+                        break 
+        except Exception as e: 
+            print(f"Could not fetch or parse feed for {journal}. Error: {e}")
+    
+    if not new_articles_found:
+        print("No new (unposted) articles found in any feed.")
         return None
-    except Exception as e: 
-        print(f"Could not parse local XML file. Error: {e}")
-        return None
+        
+    chosen_article = random.choice(new_articles_found)
+    return chosen_article
 
 def summarize_and_format(article):
     """مقاله را دریافت، خلاصه کرده، هشتگ می‌سازد و برای تلگرام فرمت‌بندی می‌کند."""
     if client is None: return "AI client is not available.", None
     print(f"Analyzing article: {article['title']}")
     
-    # --- STEP 1: Generate a longer, detailed, emoji-bulleted summary ---
-    system_message_summary = "شما یک نویسنده و متفکر عمیق مسلط به فلسفه و روانشناسی هستید. وظیفه شما دریافت یک مقاله انگلیسی از سایت The School of Life و نوشتن یک خلاصه تحلیلی عمیق و مفهومی (حدود ۲۵۰ تا ۳۰۰ کلمه) به زبان فارسی است. خلاصه باید روان، جذاب و فلسفی باشد. مفاهیم اصلی را با استفاده از اموجی‌های مناسب (مانند 💡, 🎯, 🧠) به جای بولت پوینت، دسته‌بندی کنید تا خوانایی بالا برود. مستقیماً خلاصه را شروع کنید و هیچ مقدمه یا توضیحی درباره کاری که انجام می‌دهید ننویسید."
+    # --- STEP 1: Generate Summary ---
+    system_message_summary = "شما یک نویسنده و متفکر عمیق مسلط به فلسفه و روانشناسی هستید. وظیفه شما دریافت یک مقاله انگلیسی و نوشتن یک خلاصه تحلیلی عمیق و مفهومی (حدود ۲۵۰ تا ۳۰۰ کلمه) به زبان فارسی است. خلاصه باید روان، جذاب و فلسفی باشد. مفاهیم اصلی را با استفاده از اموجی‌های مناسب (مانند 💡, 🎯, 🧠) به جای بولت پوینت، دسته‌بندی کنید تا خوانایی بالا برود. مستقیماً خلاصه را شروع کنید و هیچ مقدمه یا توضیحی درباره کاری که انجام می‌دهید ننویسید."
     user_message_summary = f"Please summarize this article in a detailed, 250-300 word, fluid, and engaging Persian summary, using emojis for key concepts:\n\nTitle: {article['title']}\n\nContent:\n{article['content']}"
     
     persian_summary = ""
@@ -112,7 +122,7 @@ def summarize_and_format(article):
         print(f"Could not analyze article. Error: {e}")
         return None, None
 
-    # --- STEP 2: Translate the Title ---
+    # --- STEP 2: Translate Title ---
     print("Waiting for 5 seconds...")
     time.sleep(5)
     system_message_title = "Translate the following English title to Persian. Only return the translated text, nothing else."
@@ -138,14 +148,15 @@ def summarize_and_format(article):
         print(f"✅ Hashtags generated: {hashtags_string}")
     except Exception as e:
         print(f"Could not generate hashtags. Error: {e}")
-        hashtags_string = "#خلاصه" 
+        hashtags_string = f"#{article['source'].lower().replace(' ', '')}" 
 
-    # --- STEP 4: Assemble Final Post (All fixes applied) ---
+    # --- STEP 4: Assemble Final Post ---
     final_post = (
         f"<b>{persian_title}</b>\n\n" 
         f"{persian_summary}\n\n"
         f"{hashtags_string}\n\n"
-        f"<a href='{article['link']}'>منبع</a>\n"
+        f"<i>منبع: {article['source']}</i>\n"
+        f"<a href='{article['link']}'>ادامه مطلب</a>\n"
         f"@momento_lab 💡"
     )
     return final_post, article['link']
@@ -159,7 +170,7 @@ async def send_to_telegram(report, token, chat_id):
             chat_id=chat_id, 
             text=report, 
             parse_mode='HTML',
-            disable_web_page_preview=False # پیش‌نمایش لینک فعال است
+            disable_web_page_preview=False
         )
         print("Post successfully sent.")
     except Exception as e: print(f"Failed to send post. Error: {e}")
@@ -171,10 +182,10 @@ def main():
         return
 
     posted_links = get_posted_links()
-    new_article = get_unposted_article(LOCAL_XML_FILE, posted_links)
+    new_article = get_unposted_article(JOURNAL_FEEDS, posted_links)
     
     if new_article is None:
-        print("No new (unposted) article found in local database. Stopping.")
+        print("No new (unposted) articles found in any feed. Stopping.")
         print("\n--- AGENT RUN FINISHED ---")
         return
         
@@ -183,7 +194,7 @@ def main():
     
     if report:
         asyncio.run(send_to_telegram(report, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID))
-        add_link_to_memory(new_link) # ذخیره لینک جدید در حافظه
+        add_link_to_memory(new_link) 
     else:
         print("Failed to generate report.")
         
