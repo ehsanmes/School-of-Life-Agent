@@ -2,16 +2,14 @@ name: School of Life Daily Post Agent
 
 on:
   schedule:
-    # اجرا در ساعت ۱۷:۳۰ UTC (۹ شب به وقت ایران)
-    - cron: '30 17 * * *'
+    - cron: '30 17 * * *' # ۹ شب به وقت ایران
   workflow_dispatch: 
 
 jobs:
   build-and-run:
     runs-on: ubuntu-latest
-    
     permissions:
-      contents: write 
+      contents: write # اجازه نوشتن در ریپازیتوری برای ذخیره حافظه
 
     steps:
       - name: Checkout repository
@@ -34,21 +32,20 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python agent.py
 
-      # --- FIX: Make the commit step smarter ---
-      - name: Commit and push memory file (if it exists)
+      - name: Commit and push memory file
         run: |
           git config --global user.name "GitHub Action Bot"
           git config --global user.email "action@github.com"
           
-          # Check if the memory file exists first
-          if [ -f _last_processed_link.txt ]; then
-            git add _last_processed_link.txt
+          # چک می‌کند که آیا فایل حافظه وجود دارد یا نه
+          if [ -f _posted_articles.txt ]; then
+            git add _posted_articles.txt
             if ! git diff --staged --quiet; then
-              git commit -m "Update last processed article link"
+              git commit -m "Update posted articles list"
               git push
             else
-              echo "Memory file exists, but no new article was processed. No commit needed."
+              echo "No new articles processed. No commit needed."
             fi
           else
-            echo "Memory file not found (agent likely failed to summarize). Skipping commit."
+            echo "Memory file not found. Skipping commit."
           fi
