@@ -3,9 +3,8 @@ import feedparser
 import telegram
 import asyncio
 import time
-import requests # <--- کتابخانه requests را برای اسکرپینگ اضافه می‌کنیم
+import random # <--- برای انتخاب تصادفی
 from bs4 import BeautifulSoup
-from datetime import datetime, timedelta
 from openai import OpenAI
 
 # --- 1. CONFIGURATION ---
@@ -16,11 +15,10 @@ AVALAI_BASE_URL = "https://api.avalai.ir/v1"
 MODEL_TO_USE = "gpt-4o-mini" 
 
 # --- !!!!!!!!!!!!!!!!!!!!!!!!!!!!! ---
-# --- آدرس مستقیم صفحه مقالات ---
-ARTICLES_PAGE_URL = "https://www.theschooloflife.com/articles/"
+# --- استفاده از فایل XML محلی به عنوان بانک مقالات ---
+LOCAL_XML_FILE = "content.xml"
+MEMORY_FILE = "_posted_articles.txt" # فایل حافظه
 # --- !!!!!!!!!!!!!!!!!!!!!!!!!!!!! ---
-
-MEMORY_FILE = "_last_processed_link.txt"
 
 # --- 2. INITIALIZE THE AI CLIENT ---
 client = None
@@ -35,84 +33,65 @@ else:
 
 # --- 3. FUNCTIONS ---
 
-def get_last_processed_link():
-    """لینک ذخیره شده در فایل حافظه را می‌خواند"""
+def get_posted_links():
+    """لیست لینک‌های قبلاً پست شده را از حافظه می‌خواند"""
     try:
         with open(MEMORY_FILE, 'r') as f:
-            return f.read().strip()
+            # خواندن هر خط و حذف فضاهای خالی
+            return set(line.strip() for line in f.readlines() if line.strip())
     except FileNotFoundError:
         print("Memory file not found. Will create one.")
-        return None
+        return set()
 
-def set_last_processed_link(link):
-    """لینک جدید را در فایل حافظه می‌نویسد"""
+def add_link_to_memory(link):
+    """لینک جدید را به فایل حافظه اضافه می‌کند"""
     try:
-        with open(MEMORY_FILE, 'w') as f:
-            f.write(link)
+        with open(MEMORY_FILE, 'a') as f: # 'a' for append (افزودن به انتها)
+            f.write(link + '\n')
         print(f"Updated memory file with new link: {link}")
     except Exception as e:
         print(f"Error writing to memory file: {e}")
 
-def get_newest_article_from_webpage(url):
-    """مستقیماً صفحه وب را اسکرپ می‌کند تا جدیدترین مقاله را پیدا کند"""
-    print(f"Scraping webpage: {url}...")
+def get_unposted_article(xml_file, posted_links):
+    """یک مقاله تصادفی که قبلاً پست نشده را از فایل XML انتخاب می‌کند"""
+    print(f"Fetching articles from local file: {xml_file}...")
     try:
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36'}
-        response = requests.get(url, headers=headers, timeout=15)
-        response.raise_for_status() # بررسی خطا
-        
-        soup = BeautifulSoup(response.content, 'html.parser')
-        
-        # بر اساس ساختار سایت The School of Life، مقالات در تگ <article> هستند
-        latest_article_element = soup.find('article')
-        
-        if not latest_article_element:
-            print("No <article> tag found on the page.")
+        feed = feedparser.parse(xml_file)
+        if not feed.entries:
+            print("No entries found in local XML file.")
             return None
-
-        # پیدا کردن لینک و عنوان
-        link_tag = latest_article_element.find('a', href=True)
-        title_tag = latest_article_element.find('h3') # یا تگ عنوان مناسب دیگر
-        
-        if not link_tag or not title_tag:
-            print("Could not find link or title tag within the article element.")
-            return None
-
-        article_link = link_tag['href']
-        article_title = title_tag.get_text().strip()
-        
-        # حالا به صفحه خود مقاله می‌رویم تا متن کامل را بگیریم
-        print(f"Found latest article: {article_title}. Fetching content...")
-        article_response = requests.get(article_link, headers=headers, timeout=15)
-        article_response.raise_for_status()
-        
-        article_soup = BeautifulSoup(article_response.content, 'html.parser')
-        
-        # پیدا کردن بخش محتوای اصلی مقاله
-        content_element = article_soup.find('div', class_='entry-content') # کلاس معمول برای محتوای پست
-        if not content_element:
-            content_element = article_soup.find('article') # بازگشت به تگ مقاله
             
-        if not content_element:
-            print("Could not find main content element on article page.")
+        unposted_articles = []
+        for entry in feed.entries:
+            if entry.link not in posted_links:
+                unposted_articles.append(entry)
+        
+        if not unposted_articles:
+            print("No new articles left to post from the database.")
             return None
-
-        # استخراج متن تمیز
-        article_text = content_element.get_text(separator='\n', strip=True)
+            
+        # انتخاب یک مقاله تصادفی از بین مقالات پست نشده
+        chosen_entry = random.choice(unposted_articles)
+        print(f"Found new article to post: {chosen_entry.title}")
+        
+        content_html = chosen_entry.get('content', [{}])[0].get('value', '')
+        if not content_html:
+            content_html = getattr(chosen_entry, 'description', '')
+        
+        summary_text = BeautifulSoup(content_html, 'html.parser').get_text()
         
         article = {
-            "title": article_title,
-            "link": article_link,
-            "content": article_text
+            "title": chosen_entry.title,
+            "link": chosen_entry.link,
+            "content": summary_text
         }
         return article
         
     except Exception as e: 
-        print(f"Could not scrape webpage. Error: {e}")
+        print(f"Could not parse local XML file. Error: {e}")
         return None
 
 def summarize_and_format(article):
-    """مقاله را دریافت، خلاصه کرده، هشتگ می‌سازد و برای تلگرام فرمت‌بندی می‌کند."""
     if client is None: return "AI client is not available.", None
     print(f"Analyzing article: {article['title']}")
     
@@ -162,31 +141,26 @@ async def send_to_telegram(report, token, chat_id):
         print("Post successfully sent.")
     except Exception as e: print(f"Failed to send post. Error: {e}")
 
-# --- 4. EXECUTION (with new scraping logic) ---
+# --- 4. EXECUTION (with memory logic) ---
 def main():
     if client is None:
         print("Agent will not run. Check API Key.")
         return
 
-    last_link = get_last_processed_link()
-    new_article = get_newest_article_from_webpage(ARTICLES_PAGE_URL) # <--- استفاده از تابع جدید
+    posted_links = get_posted_links()
+    new_article = get_unposted_article(LOCAL_XML_FILE, posted_links)
     
     if new_article is None:
-        print("No articles found on webpage. Stopping.")
-        print("\n--- AGENT RUN FINISHED ---")
-        return
-
-    if new_article['link'] == last_link:
-        print("Article is the same as last run. No new article found. Stopping.")
+        print("No new article found in local database to post. Stopping.")
         print("\n--- AGENT RUN FINISHED ---")
         return
         
-    print(f"New article found! Processing: {new_article['title']}")
+    print(f"New article selected! Processing: {new_article['title']}")
     report, new_link = summarize_and_format(new_article)
     
     if report:
         asyncio.run(send_to_telegram(report, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID))
-        set_last_processed_link(new_link) # ذخیره لینک جدید در حافظه
+        add_link_to_memory(new_link) # ذخیره لینک جدید در حافظه
     else:
         print("Failed to generate report.")
         
