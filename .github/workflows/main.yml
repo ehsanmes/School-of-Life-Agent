@@ -4,47 +4,60 @@ on:
   schedule:
     # اجرا در ساعت ۱۷:۳۰ UTC (۹ شب به وقت ایران)
     - cron: '30 17 * * *'
-  workflow_dispatch: 
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'فقط پیش‌نمایش پست، بدون ارسال به تلگرام'
+        type: boolean
+        default: false
+
+# جلوگیری از دو اجرای هم‌زمان که ممکن است یک مقاله را دوبار پست کنند
+concurrency:
+  group: daily-post
+  cancel-in-progress: false
 
 jobs:
   build-and-run:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
-      contents: write 
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.12'
+          cache: 'pip'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: |
+          pip install pytest
+          python -m pytest -q
 
       - name: Run the agent
         env:
           AVALAI_API_KEY: ${{ secrets.AVALAI_API_KEY }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
         run: python agent.py
 
-      - name: Commit and push memory file (if it exists)
+      - name: Commit and push memory file
         run: |
-          git config --global user.name "GitHub Action Bot"
-          git config --global user.email "action@github.com"
-          if [ -f _posted_articles.txt ]; then
-            git add _posted_articles.txt
-            if ! git diff --staged --quiet; then
-              git commit -m "Update posted articles list"
-              git push
-            else
-              echo "No new articles processed. No commit needed."
-            fi
-          else
-            echo "Memory file not found. Skipping commit."
+          git config user.name "GitHub Action Bot"
+          git config user.email "action@github.com"
+          git add _posted_articles.txt 2>/dev/null || true
+          if git diff --staged --quiet; then
+            echo "No new articles processed. No commit needed."
+            exit 0
           fi
+          git commit -m "Update posted articles list"
+          git pull --rebase
+          git push
